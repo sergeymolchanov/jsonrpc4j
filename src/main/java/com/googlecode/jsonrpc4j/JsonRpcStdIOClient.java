@@ -5,8 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.InputStream;
 
-public class JsonRpcStdIOClient extends JsonRpcAbstractStreamClient {
+/**
+ * A JSON-RPC client that uses OS standard IO
+ */
+public class JsonRpcStdIOClient extends JsonRpcAbstractKeepAliveStreamClient {
     private static final long DEFAULT_TIMEOUT = 10000;
+
+    private static final byte[] QUERY_DELIMITER = new byte[] { 10, 13 };
 
     private final Object connectionLock = new Object();
 
@@ -15,18 +20,43 @@ public class JsonRpcStdIOClient extends JsonRpcAbstractStreamClient {
     private Process process = null;
     private InputStream errorStream = null;
 
+    /**
+     * Creates the {@link JsonRpcStdIOClient} bound to created process
+     * @param command {@link ProcessBuilder} arguments
+     */
     public JsonRpcStdIOClient(String... command) {
         this(new ObjectMapper(), false, DEFAULT_TIMEOUT, command);
     }
 
+    /**
+     * Creates the {@link JsonRpcStdIOClient} bound to created process
+     * @param keepAlive If <code>false</code>, streams are closing after every query.
+     *                  If <code>true</code> streams close after IO error.
+     * @param command {@link ProcessBuilder} arguments
+     */
     public JsonRpcStdIOClient(boolean keepAlive, String... command ) {
         this(new ObjectMapper(), keepAlive, DEFAULT_TIMEOUT, command);
     }
 
+    /**
+     * Creates the {@link JsonRpcStdIOClient} bound to created process
+     * @param keepAlive If <code>false</code>, streams are closing after every query.
+     *                  If <code>true</code> streams close after IO error.
+     * @param timeout   Request timeout in milliseconds. <code>-1</code> for no timeout.
+     * @param command   {@link ProcessBuilder} arguments
+     */
     public JsonRpcStdIOClient(boolean keepAlive, long timeout, String... command) {
         this(new ObjectMapper(), keepAlive, timeout, command);
     }
 
+    /**
+     * Creates the {@link JsonRpcStdIOClient} bound to created process
+     * @param objectMapper the {@link ObjectMapper}
+     * @param keepAlive If <code>false</code>, streams are closing after every query.
+     *                  If <code>true</code> streams close after IO error.
+     * @param timeout   Request timeout in milliseconds. <code>-1</code> for no timeout.
+     * @param command   {@link ProcessBuilder} arguments
+     */
     protected JsonRpcStdIOClient(ObjectMapper objectMapper, boolean keepAlive, long timeout, String... command) {
         super(objectMapper, keepAlive, timeout);
 
@@ -40,7 +70,7 @@ public class JsonRpcStdIOClient extends JsonRpcAbstractStreamClient {
                 throw new IOException("Client is closed");
             }
 
-            if (process == null || !process.isAlive()) {
+            if (!processIsAlive()) {
                 ProcessBuilder builder = new ProcessBuilder(command);
 
                 process = builder.redirectErrorStream(true).start();
@@ -53,22 +83,31 @@ public class JsonRpcStdIOClient extends JsonRpcAbstractStreamClient {
     }
 
     @Override
-    protected boolean isStreamsOpen() {
-        synchronized (connectionLock) {
-            return (process != null && process.isAlive());
-        }
-    }
-
-    @Override
     protected void closeStreams() throws IOException {
         synchronized (connectionLock) {
-            if (process == null || !process.isAlive()) return;
+            if (!processIsAlive()) return;
 
             process.destroy();
             process = null;
 
             super.outputStream = null;
             super.inputStream = null;
+        }
+    }
+
+    @Override
+    protected byte[] getQueryDelimiter() {
+        return QUERY_DELIMITER;
+    }
+
+    private boolean processIsAlive() {
+        if (process == null) return false;
+
+        try {
+            process.exitValue();
+            return false;
+        } catch(IllegalThreadStateException e) {
+            return true;
         }
     }
 }
